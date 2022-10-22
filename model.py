@@ -5,9 +5,10 @@ from helper_functions import create_tensorboard_callback
 
 
 class ModelTrainer:
+    _base_model = None
     _train_data = None
     _test_data = None
-    _class_name = None
+    class_names = None
     _model_checkpoint_callback = None
     _tensorboard_callback = None
     _checkpoint_path = None
@@ -45,7 +46,7 @@ class ModelTrainer:
 
         self._test_data = test_data.map(map_func=self._preprocess_image, num_parallel_calls=tf.data.AUTOTUNE)
         self._test_data = self._test_data.batch(32).prefetch(buffer_size=tf.data.AUTOTUNE)
-        self._class_names = ds_info.features["label"].names
+        self.class_names = ds_info.features["label"].names
 
     def _make_model(self, model_class, load_from_checkpoint=False):
         self._base_model = model_class(include_top=False)
@@ -54,7 +55,7 @@ class ModelTrainer:
         input_layer = tf.keras.layers.Input(shape=(224, 224, 3))
         x = self._base_model(input_layer, training=False)
         x = tf.keras.layers.GlobalAveragePooling2D(name="GlobalAveragePooling2D")(x)
-        x = tf.keras.layers.Dense(len(self._class_names))(x)
+        x = tf.keras.layers.Dense(len(self.class_names))(x)
         output = tf.keras.layers.Activation(tf.keras.activations.softmax, dtype=tf.float32, name="softmax_float32")(x)
         model = tf.keras.Model(input_layer, output)
         if load_from_checkpoint:
@@ -97,12 +98,8 @@ class ModelTrainer:
             layer.trainable = True
 
     def fine_tune(self, model_class):
-        if self.__load_model:
-            model = tf.keras.models.load_model(self.__model_name)
-            self._compiled_model = model
-        else:
-            model = self._make_model(model_class, load_from_checkpoint=True)
-            self._compiled_model = model
+        model = self._make_model(model_class, load_from_checkpoint=True)
+        self._compiled_model = model
 
         self._base_model.trainable = False
         self._unfreeze_top_layers()
@@ -112,7 +109,7 @@ class ModelTrainer:
                                      optimizer=tf.keras.optimizers.Adam(learning_rate=0.0001),
                                      metrics=["accuracy"])
 
-        ft_history = self._compiled_model.fit(self._train_data, epochs=self._total_epochs,
+        ft_history = self._compiled_model.fit(self._train_data, epochs=self._total_epochs + self._initial_epoch,
                                               steps_per_epoch=len(self._train_data),
                                               validation_data=self._test_data,
                                               use_multiprocessing=True,
@@ -121,5 +118,12 @@ class ModelTrainer:
                                               callbacks=[self._tensorboard_callback, self._model_checkpoint_callback])
         return ft_history
 
+    def pick_model_by_checkpoint(self, model_class):
+        self._compiled_model = self._make_model(model_class=model_class, load_from_checkpoint=True)
+        self._compiled_model.compile(loss=tf.keras.losses.sparse_categorical_crossentropy,
+                                     optimizer=tf.keras.optimizers.Adam(learning_rate=0.0001),
+                                     metrics=["accuracy"])
+        return self._compiled_model
+
     def save_as(self, filename):
-        self.compiled_model.save(filename)
+        self._compiled_model.save(filename)
